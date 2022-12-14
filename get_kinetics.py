@@ -11,26 +11,21 @@ import matplotlib.pyplot as plt
 # Setup
 
 from src.rate_optimiser import RateOptimiser
-from src.utils import fetch_measured_states, fetch_initial_states
+from src.utils import load_csv, fetch_initial_states
 
 ropter = RateOptimiser()
-ropter.set_system()
+ropter.set_system( reversible=False )
 ropter.input( 
-    fetch_measured_states(), 
+    load_csv(),
     fetch_initial_states( ropter.species ) 
 ) 
-# print(ropter.states_0)
 
-states_0 = fetch_initial_states( ropter.species ) 
-for key in states_0.keys():
-    print( key, states_0[key] )
 #------------------------------------------------------------------------------------------
 
 # Optimisation
-k = np.random.uniform( low=0.5, high=1, size=7 ) # forward reaction rate params
-a = ropter.objective( k )
 
-
+optimal_k = ropter.optimise( )
+print( optimal_k )
 
 
 

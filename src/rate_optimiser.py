@@ -5,6 +5,8 @@ from chempy.chemistry import Reaction
 from chempy import ReactionSystem
 from chempy.kinetics.ode import get_odesys
 import numpy as np
+from scipy.optimize import basinhopping
+
 
 #------------------------------------------------------------------------------------------
 
@@ -19,7 +21,7 @@ class ReactionSystemExtended( ReactionSystem ):
 
     def update_rate_params( self, rate_params ):
         '''
-        Update the reaction rate `param` of all :class:`Reaction`s
+        Updates the reaction rate parameters of all :class:`Reaction`s
         in the :class:`ReactionSystem`
         '''
 
@@ -31,14 +33,25 @@ class ReactionSystemExtended( ReactionSystem ):
 
 #------------------------------------------------------------------------------------------
 
+class CustomBasinHop:
+    def __init__(self, stepsize=1):
+        self.stepsize = stepsize
+    def __call__(self, k):
+        s = self.stepsize
+        random_step = np.random.uniform(low=-s, high=s, size=k.shape)
+        k += random_step
+        return k
+
+custom_hop = CustomBasinHop()
+
+#------------------------------------------------------------------------------------------
 class RateOptimiser:
     '''
-    ADD DESCRIPTION 
-
-    Parameters
-    ----------
-        states_measured: :pandas.DataFrame:
-        states_initial: :pandas.DataFrame: 
+    Methods to:
+        define the reaction system (:class:`ReactionSystem`)
+        load the input (initial conditions & measured states)
+        calculate the net error between the measurements & model prediciton (objective function)
+        optimise the rate parameters by minimisation of the objective function
     '''
 #------------------------------------------------------------------------------------------
 
@@ -78,7 +91,8 @@ class RateOptimiser:
 
 
         # Number of reactions
-        num_rxns = len( reactants ) 
+        num_rxns = len( reactants )
+        setattr( self, 'num_rxns', num_rxns )
 
         # Forward rate params & reactions
         forward_rate_params = np.random.uniform( low=0.5, high=1, size=num_rxns ) # forward reaction rate params
@@ -89,103 +103,155 @@ class RateOptimiser:
         if reversible:
             backward_rate_params = np.random.uniform( low=0.1, high=0.5, size=num_rxns ) # backward reaction rate params
             backward_reactions = [ Reaction( r, p, k ) for r, p, k in zip( products, reactants, backward_rate_params ) ]
-            reactions += backward_reactions 
-        
-        # Set species
-        species = set().union( *[ rxn.keys() for rxn in reactions ] )
-        setattr( self, 'species', species)
+            reactions += backward_reactions     
 
         # Set reaction system
+        species = set().union( *[ rxn.keys() for rxn in reactions ] )
         reaction_system = ReactionSystemExtended( reactions, species )
+        substances = reaction_system.substances.keys()
         setattr( self, 'reaction_system', reaction_system )
 
+        # Derive species from reaction system (to correspond to solution of the ODE system)
+        species = [ sub for sub in substances ]
+        setattr( self, 'species', species)
+
 #------------------------------------------------------------------------------------------
 
-    def input( self, measured_states, initial_states ):
+    def input( self, measurements, initial_states ):
 
         # Set input attributes
-        setattr( self, 'states_m', measured_states )
+        setattr( self, 'states_m', measurements[0][:, 1:] )
+        setattr( self, 'species_m', measurements[1][1:] )
         setattr( self, 'states_0', initial_states )
         
-        # Extract times at which to evalutate the solution of the ODE system during optimisation
-        setattr( self, 'eval_times', list( measured_states['Time (hours)'] ))
-        print(self.eval_times)
+        # Set times at which to evalutate the solution of the ODE system
+        setattr( self, 'eval_times', measurements[0][:, 0] )
+
+        # List the indices of the predicted states that correspond to hidden states
+        indices_of_hidden_states = []
+        for i, s in enumerate( self.species ):
+            if s not in self.species_m:
+                indices_of_hidden_states.append( i )
+        np.asarray( indices_of_hidden_states, dtype=int )
+        setattr( self, 'i_m', indices_of_hidden_states )
+
+        # Set maxium of the measured states
+        setattr( self, 'max_measured', np.max( self.states_m ) )
+
+        # Normlise the measured states
+        setattr( self, 'states_nm', self.states_m / self.max_measured )
+        
 
 
 #------------------------------------------------------------------------------------------
 
-    def objective( self, rate_params ):
+
+    def objective( self, rate_params_ex ):
         '''
-        Updates the reaction `rate_params` of the reaction system
-        Converts the reaction system into an ODE system (:class:`pyodesys.symbolic.SymbolicSys`)
-        Solves the ODE system for the predicted states using the initial states attribute
-        Calculates the error as sum over time of the squared discrepency between the predicted and measured states
+        Returns the `net_error` as sum (over time) of the squared discrepency between 
+        the predicted and measured states given a set of exponentiated rate parameters, by:
+            updating the rate parameters of the reaction system,
+            converting the reaction system into an ODE system (:class:`pyodesys.symbolic.SymbolicSys`),
+            solving the ODE system (to get the predicted states) based on the `initial_states` attribute,
+            extracting the normalised visible states from all those predicted
         '''
 
-        # Update rate params 
-        self.reaction_system.update_rate_params( rate_params )
-        
-        # print(self.states_0)
-        # print(self.eval_times)
+        # Update the rate params of the reaction system 
+        self.reaction_system.update_rate_params( 10**rate_params_ex )
 
         # Convert to ODE system
         ode_system, _ = get_odesys( self.reaction_system )
 
-        # Solve ODE system for states predicted
+        # Solve the ODE system (states predicted)
         states_p = ode_system.integrate(
             self.eval_times, # evaluation times
             self.states_0,  # initial states
             atol=1e-12,  
             rtol= 1e-13
-        )
+        ).yout
         
-        # print( ' states_0.xout ', self.states_0)
+        # Extract the Normalised Visible states from all states Predicted
+        states_nvp = np.delete( states_p, self.i_m, 1 ) / self.max_measured
+        del states_p
 
-        # for key in self.states_0.keys():
-        #     print(key, self.states_0[key])
+        # Calculate the error as the sum (over time) of the squared discrepency
+        discrepency = states_nvp[:, :] - self.states_nm[:, :]
+        net_error = np.sum( np.multiply( discrepency, discrepency ) )
 
-        print( ' states_p[0].xout ', states_p.xout)
-        print( ' states_p[0].yout ', states_p.yout)
+        # print( 'net_error = ', net_error )
+        return net_error 
+        
+        
+    def plot(self):
+        pass
+        # # Normalise visible states predicted
+        # states_nvp = 1 
+        # # print( ' states_0.xout ', self.states_0)
+
+        # # for key in self.states_0.keys():
+        # #     print(key, self.states_0[key])
+
+        # # print( ' states_p[0].xout ', states_p.xout)
+        # # print( ' states_p[0].yout ', states_p.yout)
+        # # print( ' type ', type(states_p.yout) ) 
+
+        # print( self.states_0 )
+        # print( self.species )
+        # print( states_p )
 
         # Plot
-        import matplotlib.pyplot as plt
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        for ax in axes:
-            plt.plot(states_p.xout, states_p.yout )
-            plt.plot( self.eval_times, self.states_m[ 'Cu' ] )
-            plt.plot( self.eval_times, self.states_m[ 'Ni' ] )
-            plt.plot( self.eval_times, self.states_m[ 'Fe' ] )
+        # import matplotlib.pyplot as plt
+        # fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        # for ax in axes:
+        #     plt.plot(states_p.xout, states_p.yout )
+        #     plt.plot( self.eval_times, self.states_m[ 'Cu' ] )
+        #     plt.plot( self.eval_times, self.states_m[ 'Ni' ] )
+        #     plt.plot( self.eval_times, self.states_m[ 'Fe' ] )
 
-            # _ = states_p[0].plot(names=[k for k in self.reaction_system.substances if k != 'H2O'], ax=ax)
-            _ = ax.legend(loc='best', prop={'size': 9})
-            _ = ax.set_xlabel('Time')
-            _ = ax.set_ylabel('Concentration')
-        # _ = axes[1].set_ylim([1e-13, 1e-1])
-        _ = axes[1].set_xscale('log')
-        _ = axes[1].set_yscale('log')
-        _ = fig.tight_layout()
-        _ = fig.savefig('test_objective.png', dpi=72)
-
-
-
-        return states_p
-
+        #     # _ = states_p[0].plot(names=[k for k in self.reaction_system.substances if k != 'H2O'], ax=ax)
+        #     _ = ax.legend(loc='best', prop={'size': 9})
+        #     _ = ax.set_xlabel('Time')
+        #     _ = ax.set_ylabel('Concentration')
+        # # _ = axes[1].set_ylim([1e-13, 1e-1])
+        # _ = axes[1].set_xscale('log')
+        # _ = axes[1].set_yscale('log')
+        # _ = fig.tight_layout()
+        # _ = fig.savefig('test_objective.png', dpi=72)
 
 #------------------------------------------------------------------------------------------
 
+    # def generate_random_rate_param_ex( self ):
+    #     '''Generate random exponentiated rate parameter'''
+    #     rate_param_ex = \
+    #         np.random.uniform( low=0.6, high=1.4, size=self.num_rxns ) + \
+    #         np.random.uniform( low=0.1, high=0.2, size=self.num_rxns )
+    #     return rate_param_ex
 
-# def objective( ode_system ):
-    # # Delete hidden states from the full set predicted
-    # predicted_visible_states = np.delete( self.evolve_network( k_expo ), self.hidden_states, 0 )
+#------------------------------------------------------------------------------------------
 
-    # # Normalise the visible states predicted (using the measured states' maxes)
-    # predicted_visible_states_norm = predicted_visible_states.T / self.column_maxes
-        
-    # # Compute the sum over time of the squared discrepency between the predicted and measured states
-    # discrepency = predicted_visible_states_norm[:, :] - self.measured_visible_states_norm[:, :]
-    # error_squared = np.sum( np.multiply( discrepency, discrepency ) )
-
-    # state_predicted = ode_system.integrate( t_out, c0, atol=1e-12, rtol=1e-14 )
-    # pass
-
-# 
+    def optimise( self, n_epochs=1, n_hops=1, display=True ):
+        random_rates = lambda low, high: np.random.uniform( low=low, high=high, size=self.num_rxns )
+        print(  'random_rates ' , type(random_rates(0.6, 1.4)) )
+        n = 0
+        while n < n_epochs:
+            if display:
+                print(f'Epoch {n}:') 
+            # Generate random exponentiated rate parameter
+            # rate_param_ex = np.concatenate(
+            #     (random_rates(0.6, 1.4), random_rates(0.1, 0.2))
+            #     )
+            rate_param_ex = random_rates(0.1, 0.2)
+            print(rate_param_ex)
+            try:
+                rate_params_ex = basinhopping(
+                    self.objective, 
+                    rate_param_ex, 
+                    minimizer_kwargs={"method": "L-BFGS-B"}, 
+                    # T=None,
+                    niter=n_hops, 
+                    disp=display, 
+                    take_step=custom_hop,
+                    callback=None).x #self.track_convergence
+            finally:
+                n += 1 
+        return rate_params_ex
