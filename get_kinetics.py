@@ -19,15 +19,28 @@ ropter.input(
     load_csv(),
     fetch_initial_states( ropter.species ) 
 ) 
+#------------------------------------------------------------------------------------------
+
+# Checks 
+print('species_m', ropter.species_m)
+print('states_m', ropter.states_m)
+print('species', ropter.species)
+print('i hidden states', ropter.ihs)
+print('states_nm', ropter.states_nm)
+
 
 #------------------------------------------------------------------------------------------
 
 # Optimisation
 
-optimal_k = ropter.optimise( )
+optimal_k = ropter.optimise( n_epochs=1, n_hops=3 )
 print( optimal_k )
+ropter.plot( optimal_k )
 
 
+
+for rxn in ropter.reaction_system.rxns:
+    print(rxn)
 
 # print(a.Results)
 
