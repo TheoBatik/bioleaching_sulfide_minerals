@@ -65,29 +65,35 @@ class RateOptimiser:
         x = 0 
 
         # Stoichiometric coefficients of reactants and products
-        reactants = [ 
+        reactants = [
+            # Chemical
             {'Pentlandite': 2, 'Fe3+': 36},
             {'Chalcopyrite': 1, 'Fe3+': 3},
             {'Chalcopyrite': 1, 'H+': 4, 'O': 2},
             {f'Pyrrhotite_{x}': 1, 'Fe3+': 8-2*x, 'H2O': 4},
             {'Pyrite': 1, 'Fe3+': 6, 'H2O': 3},
-            {'(S2O3)2-': 1, 'Fe3+': 8, 'H2O': 5}, 
-            {'S': 8, 'O': 32 }
+            {'(S2O3)2-': 1, 'Fe3+': 8, 'H2O': 5},
+            # Microbial
+            {'S': 8, 'O': 32 },
+            {'Fe2+': 4, 'O': 2, 'H+': 4} # fix k for microbial reaction
         ]
         products = [
+            # Chemical
             {'Ni2+': 9, 'Fe2+': 45, 'S': 16},
             {'Cu2+': 1, 'Fe2+': 5, 'S': 2},
             {'Cu2+': 1, 'Fe2+': 1, 'S': 2, 'H2O': 2},
             {'Fe2+': 9-3*x, '(SO4)2-': 1, 'H+': 8},
             {'(S2O3)2-': 1, 'Fe2+': 7, 'H+': 6},
-            {'(S04)2-': 1, 'Fe2+': 8, 'H+': 10},
-            {'(SO4)2-': 8}
+            {'(SO4)2-': 1, 'Fe2+': 8, 'H+': 10},
+            # Microbial
+            {'(SO4)2-': 8},
+            {'Fe3+': 4, 'H20': 2}
         ]
 
         # INITIAL CONDITIONS! add acid [] based on pH, + Ferrous iron
         # Add Microbial reactions:
-        # 1) ferrous to Feric
-        # 2) sulfur to sulfuric acid
+        # 1) ferrous to Feric  x 
+        # 2) sulfur to sulfuric acid x 
 
 
         # Number of reactions
@@ -120,20 +126,20 @@ class RateOptimiser:
     def input( self, measurements, initial_states ):
 
         # Set input attributes
-        setattr( self, 'states_m', measurements[0][:, 1:] )
-        setattr( self, 'species_m', measurements[1][1:] )
-        setattr( self, 'states_0', initial_states )
+        setattr( self, 'states_m', measurements[0][:, 1:] ) # measured states
+        setattr( self, 'species_m', measurements[1][1:] ) # measured species
+        setattr( self, 'states_0', initial_states ) # initial conditions
         
         # Set times at which to evalutate the solution of the ODE system
         setattr( self, 'eval_times', measurements[0][:, 0] )
 
-        # List the indices of the predicted states that correspond to hidden states
-        indices_of_hidden_states = []
+        # List the indices of hidden states within those predicted states
+        indices_of_hidden_states = [ ]
         for i, s in enumerate( self.species ):
             if s not in self.species_m:
                 indices_of_hidden_states.append( i )
         np.asarray( indices_of_hidden_states, dtype=int )
-        setattr( self, 'i_m', indices_of_hidden_states )
+        setattr( self, 'ihs', indices_of_hidden_states )
 
         # Set maxium of the measured states
         setattr( self, 'max_measured', np.max( self.states_m ) )
@@ -148,16 +154,16 @@ class RateOptimiser:
 
     def objective( self, rate_params_ex ):
         '''
-        Returns the `net_error` as sum (over time) of the squared discrepency between 
+        Returns the `net_error` as the sum (over time) of the squared discrepency between 
         the predicted and measured states given a set of exponentiated rate parameters, by:
-            updating the rate parameters of the reaction system,
-            converting the reaction system into an ODE system (:class:`pyodesys.symbolic.SymbolicSys`),
-            solving the ODE system (to get the predicted states) based on the `initial_states` attribute,
-            extracting the normalised visible states from all those predicted
+            Updating the rate parameters of the reaction system,
+            Converting the reaction system into an ODE system (:class:`pyodesys.symbolic.SymbolicSys`),
+            Solving the ODE system (to get the predicted states) based on the `initial_states` attribute,
+            Extracting the normalised visible states from all those predicted
         '''
 
         # Update the rate params of the reaction system 
-        self.reaction_system.update_rate_params( 10**rate_params_ex )
+        self.reaction_system.update_rate_params( 2**rate_params_ex )
 
         # Convert to ODE system
         ode_system, _ = get_odesys( self.reaction_system )
@@ -167,56 +173,22 @@ class RateOptimiser:
             self.eval_times, # evaluation times
             self.states_0,  # initial states
             atol=1e-12,  
-            rtol= 1e-13
+            rtol=1e-13
         ).yout
         
-        # Extract the Normalised Visible states from all states Predicted
-        states_nvp = np.delete( states_p, self.i_m, 1 ) / self.max_measured
+        # Derive the Normalised Visible states from the Predicted states
+        states_nvp = np.delete( states_p, self.ihs, 1 ) / self.max_measured
         del states_p
 
         # Calculate the error as the sum (over time) of the squared discrepency
-        discrepency = states_nvp[:, :] - self.states_nm[:, :]
+        discrepency = states_nvp[1:, :] - self.states_nm[1:, :]
         net_error = np.sum( np.multiply( discrepency, discrepency ) )
 
         # print( 'net_error = ', net_error )
         return net_error 
         
         
-    def plot(self):
-        pass
-        # # Normalise visible states predicted
-        # states_nvp = 1 
-        # # print( ' states_0.xout ', self.states_0)
-
-        # # for key in self.states_0.keys():
-        # #     print(key, self.states_0[key])
-
-        # # print( ' states_p[0].xout ', states_p.xout)
-        # # print( ' states_p[0].yout ', states_p.yout)
-        # # print( ' type ', type(states_p.yout) ) 
-
-        # print( self.states_0 )
-        # print( self.species )
-        # print( states_p )
-
-        # Plot
-        # import matplotlib.pyplot as plt
-        # fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        # for ax in axes:
-        #     plt.plot(states_p.xout, states_p.yout )
-        #     plt.plot( self.eval_times, self.states_m[ 'Cu' ] )
-        #     plt.plot( self.eval_times, self.states_m[ 'Ni' ] )
-        #     plt.plot( self.eval_times, self.states_m[ 'Fe' ] )
-
-        #     # _ = states_p[0].plot(names=[k for k in self.reaction_system.substances if k != 'H2O'], ax=ax)
-        #     _ = ax.legend(loc='best', prop={'size': 9})
-        #     _ = ax.set_xlabel('Time')
-        #     _ = ax.set_ylabel('Concentration')
-        # # _ = axes[1].set_ylim([1e-13, 1e-1])
-        # _ = axes[1].set_xscale('log')
-        # _ = axes[1].set_yscale('log')
-        # _ = fig.tight_layout()
-        # _ = fig.savefig('test_objective.png', dpi=72)
+    
 
 #------------------------------------------------------------------------------------------
 
@@ -229,19 +201,21 @@ class RateOptimiser:
 
 #------------------------------------------------------------------------------------------
 
-    def optimise( self, n_epochs=1, n_hops=1, display=True ):
+    def optimise( self, n_epochs=3, n_hops=10, display=True ):
         random_rates = lambda low, high: np.random.uniform( low=low, high=high, size=self.num_rxns )
-        print(  'random_rates ' , type(random_rates(0.6, 1.4)) )
         n = 0
         while n < n_epochs:
+            
             if display:
-                print(f'Epoch {n}:') 
+                print(f'\nEpoch {n+1}:') 
+
+            rate_param_ex = random_rates(0.6, 1.4)
             # Generate random exponentiated rate parameter
             # rate_param_ex = np.concatenate(
             #     (random_rates(0.6, 1.4), random_rates(0.1, 0.2))
             #     )
-            rate_param_ex = random_rates(0.1, 0.2)
-            print(rate_param_ex)
+            # rate_param_ex = random_rates(0.6, 1.4)
+            # print(rate_param_ex)
             try:
                 rate_params_ex = basinhopping(
                     self.objective, 
@@ -252,6 +226,64 @@ class RateOptimiser:
                     disp=display, 
                     take_step=custom_hop,
                     callback=None).x #self.track_convergence
+            except:
+                pass
             finally:
-                n += 1 
+                n += 1
         return rate_params_ex
+
+
+
+    def plot( self, rate_params_ex ):
+        
+
+        # Update the rate params of the reaction system 
+        self.reaction_system.update_rate_params( 2**rate_params_ex )
+
+        # Convert to ODE system
+        ode_system, _ = get_odesys( self.reaction_system )
+
+        # Solve the ODE system (states predicted)
+        states_p = ode_system.integrate(
+            self.eval_times, # evaluation times
+            self.states_0,  # initial states
+            atol=1e-12,  
+            rtol= 1e-13
+        )
+
+        print( 'Predicted states', states_p.yout )
+        import matplotlib.pyplot as plt
+        
+        # Predicted
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        for ax in axes:
+            # plt.plot( states_p.xout, states_p.yout )
+            # plt.plot( self.eval_times, self.states_m[:, 0] )
+            # plt.plot( self.eval_times, self.states_m[:, 1] )
+            # plt.plot( self.eval_times, self.states_m[:, 2] )
+            ignore = ['H20', 'O']
+            only = ['Fe3+', 'Cu2+', 'Fe2+']
+            _ = states_p.plot(names=[k for k in self.reaction_system.substances if k in only], ax=ax)
+            _ = ax.legend(loc='best', prop={'size': 9})
+            _ = ax.set_xlabel('Time (hours)')
+            _ = ax.set_ylabel('Concentration (mg/L)')
+        # _ = axes[1].set_ylim([1e-13, 1e-1])
+        _ = axes[1].set_xscale('log')
+        _ = axes[1].set_yscale('log')
+        _ = fig.tight_layout()
+        _ = fig.savefig('results/plots/test_k_optimal_predicted.png', dpi=72)
+
+        # Measured
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        for ax in axes:
+            ax.plot( self.eval_times, self.states_m[:, 0], label='Cu2+' )
+            ax.plot( self.eval_times, self.states_m[:, 1], label='Fe2+' )
+            ax.plot( self.eval_times, self.states_m[:, 2], label='Ni2+' )
+            _ = ax.legend(loc='best', prop={'size': 9})
+            _ = ax.set_xlabel('Time')
+            _ = ax.set_ylabel('Concentration')
+        _ = axes[1].set_ylim([1e-5, 1e4])
+        _ = axes[1].set_xscale('log')
+        _ = axes[1].set_yscale('log')
+        _ = fig.tight_layout()
+        _ = fig.savefig('results/plots/measured_data.png', dpi=72)
