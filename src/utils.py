@@ -4,12 +4,7 @@ from collections import defaultdict
 import numpy as np
 
 
-def fetch_measured_states( file_name='dataset_1_new' ):
-    measured_states = pd.read_csv( os.path.join('data', 'clean', f'{file_name}.csv') ) 
-    return measured_states
-
-
-def load_csv(csv_name):
+def load_csv( csv_name='dataset_1' ):
     matrix = []
     with open( os.path.join('data', 'clean', f'{csv_name}.csv'), 'r', encoding='utf-8-sig') as file:
         for i, line in enumerate(file):
@@ -44,3 +39,5 @@ def fetch_initial_states( species, csv_name='c0_base' ):
 
 
     return defaultdict( np.float32, c0 )
+
+
